@@ -1,0 +1,29 @@
+version: '3.9'
+
+services:
+  jenkins-master:
+    image: jenkins/jenkins:lts
+    container_name: jenkins-master
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"  # порт для JNLP-агентов
+    volumes:
+      #      - jenkins_home:/var/jenkins_home/
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - JENKINS_AGENT_PORT=50000
+
+  jenkins-agent:
+    image: jenkins/inbound-agent
+    container_name: jenkins-agent
+    depends_on:
+      - jenkins-master
+    environment:
+      - JENKINS_URL=http://jenkins-master:8080
+      - JENKINS_AGENT_NAME=agent-1
+      - JENKINS_AGENT_WORKDIR=/home/jenkins/agent
+      - JENKINS_SECRET=f37d64600f236f72c0e95fab623ef229c18974313f76de6b4cbeab2ff1301e9c
+
+#volumes:
+#  jenkins_home:
