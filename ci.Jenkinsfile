@@ -1,103 +1,53 @@
 pipeline {
     agent any
 
-    parameters {
-        string(
-            name: 'REPO_URL',
-            defaultValue: 'https://github.com/Ivannosal/BH-HW-4',
-            description: 'Git repository URL'
-        )
-        string(
-            name: 'BRANCH',
-            defaultValue: 'main',
-            description: 'Branch to monitor'
-        )
-        credentials(
-            name: 'GIT_CREDENTIALS',
-            description: 'Git credentials for private repositories',
-            credentialType: 'com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl',
-            required: false
-        )
-    }
-
     triggers {
-        // Poll SCM every 10 minutes
-        pollSCM('H/10 * * * *')
-    }
-
-    options {
-        timeout(time: 30, unit: 'MINUTES')
-        disableConcurrentBuilds()
+        pollSCM('H/5 * * * *')
     }
 
     stages {
-        stage('Checkout Script') {
+        stage('Checkout') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/your-org/ci-scripts.git',
-                    credentialsId: 'GIT_CREDENTIALS'
+                checkout scm: [
+                    $class: 'GitSCM',
+                    branches: [[name: 'main']],
+                    userRemoteConfigs: [[
+                        url: 'git@github.com:Ivannosal/BH-HW-4.git',
+                        credentialsId: 'J'
+                    ]]
+                ]
             }
         }
 
-        stage('Validate Environment') {
+        stage('Find and Run Script') {
             steps {
                 script {
-                    // Check if required tools are available
-                    sh '''
-                        which git || echo "Git not found"
-                        git --version
-                    '''
-                }
-            }
-        }
+                    def scriptFile = findFiles(glob: '**/version-updater.sh')[0]
+                    if (!scriptFile) {
+                        error "version-updater.sh not found"
+                    }
 
-        stage('Execute Tag Automation') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: params.GIT_CREDENTIALS ?: 'none',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_PASSWORD'
-                    )]) {
-                        // Run the tag increment script with parameters
+                    dir(scriptFile.path) {
                         sh """
-                            chmod +x git_tag_increment.sh
-                            ./git_tag_increment.sh \
-                                --url "${params.REPO_URL}" \
-                                --branch "${params.BRANCH}" \
-                                --username "\${GIT_USERNAME}" \
-                                --password "\${GIT_PASSWORD}"
+                            chmod +x version-updater.sh
+                            ./version-updater.sh
                         """
                     }
                 }
             }
         }
-    }
 
-    post {
-        always {
-            publishHTML([
-                allowMissing: false,
-                alwaysLinkToLastBuild: true,
-                keepAll: true,
-                reportDir: '',
-                reportFiles: 'tag_report.html',
-                reportName: 'Tag Automation Report'
-            ])
-
-            // Archive any created artifacts
-            archiveArtifacts artifacts: '*.log,*.txt', fingerprint: true
-        }
-        success {
-            script {
-                echo "Build ${env.BUILD_NUMBER} completed successfully"
-                // Update deployment dashboard or send success notification
-            }
-        }
-        failure {
-            script {
-                echo "Build ${env.BUILD_NUMBER} failed"
-                // Send alert to team
+        stage('Push Updates') {
+            steps {
+                sh '''
+                    git add . || true
+                    git diff --staged --quiet || (
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@ci.com"
+                        git commit -m "Auto-update versions"
+                        git push origin main
+                    )
+                '''
             }
         }
     }
