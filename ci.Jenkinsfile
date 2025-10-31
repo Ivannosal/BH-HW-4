@@ -10,7 +10,7 @@ pipeline {
             steps {
                 checkout scm: [
                     $class: 'GitSCM',
-                    branches: [[name: 'main']],
+                    branches: [[name: 'master']],
                     userRemoteConfigs: [[
                         url: 'git@github.com:Ivannosal/BH-HW-4.git',
                         credentialsId: 'J'
