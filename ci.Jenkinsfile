@@ -1,94 +1,117 @@
 pipeline {
     agent any
 
-    // Disable automatic SCM checkout
-    options {
-        skipDefaultCheckout true
+    triggers {
+        pollSCM('* * * * *') // Check every minute
     }
 
-    triggers {
-        pollSCM('H/5 * * * *')
+    environment {
+        GIT_REPO = 'git@github.com:Ivannosal/BH-HW-4.git'
+        SSH_CREDENTIALS_ID = 'J'
     }
 
     stages {
-        stage('Checkout') {
+        stage('Clone Repository') {
             steps {
                 script {
-                    echo "🔄 Manual checkout from repository"
+                    echo "Cloning repository ${env.GIT_REPO}"
                     checkout([
                         $class: 'GitSCM',
-                        branches: [[name: "*/master"]],
-                        extensions: [[$class: 'CloneOption', depth: 1, shallow: true]],
+                        branches: [[name: '*/master']],
+                        extensions: [],
                         userRemoteConfigs: [[
-                            url: 'git@github.com:Ivannosal/BH-HW-4.git',
-                            credentialsId: 'J'
+                            credentialsId: env.SSH_CREDENTIALS_ID,
+                            url: env.GIT_REPO
                         ]]
                     ])
-
-                    def gitCommit = sh(
-                        script: 'git log -1 --oneline',
-                        returnStdout: true
-                    ).trim()
-                    echo "📝 Last commit: ${gitCommit}"
                 }
             }
         }
 
-        stage('Find version-updater.sh') {
+        stage('Check Tags and Commits') {
             steps {
                 script {
-                    echo "🔍 Searching for version-updater.sh..."
-                    def foundFiles = findFiles(glob: '**/version-updater.sh')
+                    // Get information about the latest tag
+                    def gitDescribe = sh(
+                        script: 'git describe --tags --always 2>/dev/null || echo "no-tags"',
+                        returnStdout: true
+                    ).trim()
 
-                    if (foundFiles.length > 0) {
-                        echo "✅ version-updater.sh found:"
-                        foundFiles.each { file ->
-                            echo " - ${file.path}"
-                            env.SCRIPT_PATH = file.path
+                    echo "Git describe result: ${gitDescribe}"
+
+                    // Check if there are new commits after the last tag
+                    if (gitDescribe == "no-tags") {
+                        echo "No tags found in repository"
+                        currentBuild.result = 'SUCCESS'
+                        return
+                    }
+
+                    if (gitDescribe.contains('-')) {
+                        echo "New commits detected after the last tag"
+
+                        // Get the last tag
+                        def lastTag = sh(
+                            script: 'git describe --tags --abbrev=0',
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Last tag: ${lastTag}"
+
+                        // Increase patch version
+                        def versionParts = lastTag.tokenize('.')
+                        if (versionParts.size() >= 3) {
+                            def major = versionParts[0]
+                            def minor = versionParts[1]
+                            def patch = versionParts[2].toInteger() + 1
+                            def newTag = "${major}.${minor}.${patch}"
+
+                            echo "New tag: ${newTag}"
+
+                            // Create annotated tag
+                            sh "git tag -a ${newTag} -m 'Jenkins auto-tag: ${newTag}'"
+
+                            // Push tag to remote repository
+                            withCredentials([sshUserPrivateKey(
+                                credentialsId: env.SSH_CREDENTIALS_ID,
+                                keyFileVariable: 'SSH_KEY'
+                            )]) {
+                                sh """
+                                    eval `ssh-agent -s`
+                                    ssh-add ${SSH_KEY}
+                                    git push origin ${newTag}
+                                    ssh-agent -k
+                                """
+                            }
+
+                            echo "Tag ${newTag} successfully created and pushed"
+                        } else {
+                            error "Invalid tag format: ${lastTag}. Expected format: X.Y.Z"
                         }
                     } else {
-                        echo "❌ version-updater.sh not found"
-                        sh 'find . -type f -name "*.sh" || echo "No shell scripts found"'
-                        error "version-updater.sh not found!"
+                        echo "No changes - latest tag points to the most recent commit"
                     }
                 }
             }
         }
 
-        stage('Execute Script') {
+        stage('Cleanup') {
             steps {
                 script {
-                    echo "🚀 Running version-updater.sh..."
-                    sh "chmod +x '${env.SCRIPT_PATH}' && './${env.SCRIPT_PATH}'"
-                }
-            }
-        }
-
-        stage('Commit Changes') {
-            when {
-                expression {
-                    def changes = sh(script: 'git status --porcelain', returnStdout: true).trim()
-                    return changes != ''
-                }
-            }
-            steps {
-                script {
-                    echo "💾 Committing changes..."
-                    sh '''
-                        git config user.name "Jenkins"
-                        git config user.email "jenkins@ci.com"
-                        git add .
-                        git commit -m "Auto-update versions by Jenkins"
-                        git push origin master
-                    '''
+                    // Remove local repository copy
+                    deleteDir()
+                    echo "Local repository copy deleted"
                 }
             }
         }
     }
 
     post {
-        always {
-            echo "Pipeline execution completed"
+        success {
+            echo "Pipeline completed successfully"
+        }
+
+        failure {
+            echo "Pipeline failed"
         }
     }
 }
